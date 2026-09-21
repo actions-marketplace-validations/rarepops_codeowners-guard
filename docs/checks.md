@@ -27,6 +27,19 @@ The `dangling` check reports rules that match no tracked file. Files excluded wi
 
 Only paths returned by `git ls-files --cached` are considered. Untracked files are intentionally ignored.
 
+## Shadowed
+
+The `shadowed` check reports a rule that matches tracked files but never takes effect, because later rules also match every one of those files and GitHub applies the last matching rule.
+
+```text
+/tools/      @devex
+/tools/*.sh  @shell
+```
+
+When every tracked file under `tools/` ends in `.sh`, the first rule is shadowed. Partially overridden rules are normal layering and are not reported. The catch-all patterns `*`, `**`, and `/**` are never reported, because they exist to cover files added later.
+
+When `duplicates` is enabled, an earlier rule that a later rule repeats exactly is left to the `duplicates` check. Files excluded with `exclude` or `--exclude` do not count. Findings describe the current tracked files, so a rule kept for files that do not exist yet can be reported until they do. The check is available starting with version `0.2.0`.
+
 ## Unowned
 
 The `unowned` check reports a tracked file when no rule matches it or when its final matching rule has no owners. Matching is case-sensitive on every platform and the last matching rule wins.
@@ -38,9 +51,40 @@ The `unowned` check reports a tracked file when no rule matches it or when its f
 
 In this example, tracked files under `generated/` are explicitly unowned.
 
+## Matching
+
+Local checks and `--explain` apply GitHub's last-match-wins rule using a gitignore-compatible matcher, with two exceptions verified against GitHub's own matcher:
+
+- A pattern that contains a slash and ends in a lone `*` matches files at that depth only. As GitHub documents, `docs/*` matches `docs/getting-started.md` but not `docs/build-app/troubleshooting.md`. Use `docs/` when a rule should cover nested files.
+- A pattern containing an unescaped `[` or `]` matches nothing, because GitHub rejects the whole line. Write `\[` and `\]` to match brackets literally.
+
+Every other pattern keeps gitignore behavior, including folder patterns such as `/build/logs/` and `apps/`. The `exclude` option always uses plain gitignore patterns.
+
 ## Invalid Lines
 
-When syntax and local checks run together, lines rejected by GitHub are omitted from local matching. This prevents an invalid rule from creating misleading local results. Local-only runs assume every parsed line is valid.
+When syntax and local checks run together, lines rejected by GitHub are omitted from local matching. This prevents an invalid rule from creating misleading local results. Local-only runs cannot ask GitHub, so they detect the invalid form verified against GitHub: a pattern with an unescaped `[` or `]`. Such a rule matches nothing, and the `dangling` check reports it with the code `invalid-pattern`. Local-only runs assume every other parsed line is valid.
+
+## Exclusions
+
+`exclude` and `--exclude` take gitignore patterns, including negation. To check only some folders, exclude everything and re-include them:
+
+```yaml
+exclude: |
+  /*
+  !/src/
+```
+
+A nested folder needs each parent folder re-included first, as in `.gitignore`:
+
+```yaml
+exclude: |
+  /*
+  !/packages/
+  /packages/*
+  !/packages/api/
+```
+
+Re-including only `!/packages/api/` has no effect, because its parent folder stays excluded.
 
 ## Result Limits
 

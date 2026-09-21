@@ -16,7 +16,7 @@ describe("packaged CLI", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).not.toContain("\t");
 		expect(result.stdout).toContain(
-			"-c, --checks <list>       Comma-separated checks (default: duplicates,dangling,unowned)",
+			"-c, --checks <list>       Comma-separated checks (default: duplicates,dangling,shadowed,unowned)",
 		);
 		expect(result.stdout).toContain(
 			"      --max-issues <count>  Maximum retained issue details",
@@ -56,6 +56,91 @@ describe("packaged CLI", () => {
 
 		expect(result.status).toBe(2);
 		expect(result.stderr).toContain("max-issues must be");
+	});
+
+	it("explains ownership through the packaged CLI in JSON and text", async () => {
+		const root = await mkdtemp(join(tmpdir(), "codeowners-guard-explain-cli-"));
+		await writeFile(join(root, "CODEOWNERS"), "* @all\n/private/\n");
+		const result = spawnSync(
+			process.execPath,
+			[cliPath, root, "--explain", "private/key.ts", "--format", "json"],
+			{ encoding: "utf8" },
+		);
+		expect(result.status).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			path: "private/key.ts",
+			codeownersPath: "CODEOWNERS",
+			matches: [
+				{ line: 1, pattern: "*", owners: ["@all"] },
+				{ line: 2, pattern: "/private/", owners: [] },
+			],
+			winner: { line: 2, pattern: "/private/", owners: [] },
+			owners: [],
+			status: "cleared",
+		});
+		const text = spawnSync(
+			process.execPath,
+			[cliPath, root, "--explain", "private/key.ts"],
+			{ encoding: "utf8" },
+		);
+		expect(text.status).toBe(0);
+		expect(text.stdout).toContain(
+			"CODEOWNERS:2 /private/ -> (no owners) [winner]",
+		);
+		expect(text.stdout).toContain("Local rules only");
+	});
+
+	it("runs the shadowed check by default", async () => {
+		const root = await mkdtemp(
+			join(tmpdir(), "codeowners-guard-shadowed-cli-"),
+		);
+		await mkdir(join(root, "tools"));
+		await writeFile(
+			join(root, "CODEOWNERS"),
+			["/tools/ @devex", "/tools/*.sh @shell"].join("\n"),
+		);
+		await writeFile(join(root, "tools", "build.sh"), "echo build");
+		execFileSync("git", ["init", "--quiet", root]);
+		execFileSync("git", ["-C", root, "-c", "core.autocrlf=false", "add", "."]);
+
+		const result = spawnSync(
+			process.execPath,
+			[cliPath, root, "--format", "json"],
+			{
+				encoding: "utf8",
+			},
+		);
+
+		expect(result.status).toBe(1);
+		expect(JSON.parse(result.stdout).issues).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					check: "shadowed",
+					code: "shadowed-rule",
+					line: 1,
+				}),
+			]),
+		);
+	});
+
+	it.each([
+		["checks", "syntax"],
+		["exclude", "dist/"],
+		["fail-on", "error"],
+		["max-issues", "1"],
+		["repository", "owner/repo"],
+		["ref", "main"],
+		["api-url", "https://example.com"],
+	])("rejects --explain with --%s", (option, value) => {
+		const result = spawnSync(
+			process.execPath,
+			[cliPath, "--explain", "src/app.ts", `--${option}`, value],
+			{ encoding: "utf8" },
+		);
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain(
+			`--explain cannot be combined with --${option}`,
+		);
 	});
 
 	it("reports local issues as JSON and applies the failure threshold", async () => {

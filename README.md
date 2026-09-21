@@ -37,19 +37,20 @@ CODEOWNERS Guard combines GitHub's own diagnostics with local repository checks.
 
 The closest tools overlap, but they optimize for different workflows. This table compares documented behavior in fixed releases rather than treating every difference as an advantage.
 
-| Capability | CODEOWNERS Guard 0.1.2 | [`codeowners-validator` 0.7.4](https://github.com/mszostok/codeowners-validator/tree/v0.7.4) | [`codeowners-audit` 2.9.0](https://github.com/watson/codeowners-audit/tree/v2.9.0) |
+| Capability | CODEOWNERS Guard 0.2.0 | [`codeowners-validator` 0.7.4](https://github.com/mszostok/codeowners-validator/tree/v0.7.4) | [`codeowners-audit` 2.9.0](https://github.com/watson/codeowners-audit/tree/v2.9.0) |
 | --- | --- | --- | --- |
 | Delivery | Native Node.js 24 Action and npm CLI | Docker Action and Go CLI | npm CLI and CI command |
 | Syntax approach | GitHub CODEOWNERS errors API at a selected ref | Built-in syntax checker | Local GitHub-parity checks |
 | Duplicate patterns | Built in (`duplicates`) | Built in (`duppatterns`) | Not documented |
 | Dangling or missing patterns | Built in (`dangling`) | Built in (`files`) | Opt-in (`--fail-on-missing-paths`) |
+| Shadowed rules | Built in (`shadowed`) | Experimental (`avoid-shadowing`) | Not documented |
 | Unowned tracked files | Built in (`unowned`) | Experimental (`notowned`) | Built in for non-interactive CI |
 | Separate owner and team lookup | Uses GitHub diagnostics; no extra lookup | Built in (`owners`) | Opt-in (`--validate-github-owners`) |
 | GitHub Actions feedback | File annotations, job summary, and outputs | Docker Action | Run the CLI in a workflow |
 | Interactive HTML coverage report | Not included | Not documented | Built in |
 | Team suggestions from Git history | Not included | Not documented | Opt-in (`--suggest-teams`) |
 
-The comparison reflects the linked release documentation checked on 2026-09-04. "Not documented" means the capability is not described there, not that it is impossible. Review each project's current documentation before choosing a tool.
+The comparison reflects the linked release documentation checked on 2026-09-04, with the shadowed-rules row checked on 2026-09-16. "Not documented" means the capability is not described there, not that it is impossible. Review each project's current documentation before choosing a tool.
 
 ## Checks
 
@@ -58,6 +59,7 @@ The comparison reflects the linked release documentation checked on 2026-09-04. 
 | `syntax` | Errors returned by GitHub's CODEOWNERS API for the selected ref | Error |
 | `duplicates` | A pattern that appears more than once | Warning |
 | `dangling` | A pattern that matches no tracked file | Warning |
+| `shadowed` | A rule that matches tracked files but never takes effect because later rules override all of them | Warning |
 | `unowned` | A tracked file with no effective owner, including files cleared by an ownerless rule | Warning |
 
 Rules use GitHub's last-match-wins behavior. CODEOWNERS Guard searches the standard locations in GitHub's order: `.github/CODEOWNERS`, `CODEOWNERS`, then `docs/CODEOWNERS`.
@@ -84,21 +86,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: rarepops/codeowners-guard@v0.1.2
+      - uses: rarepops/codeowners-guard@v0.2.0
         with:
-          checks: syntax,duplicates,dangling,unowned
+          checks: syntax,duplicates,dangling,shadowed,unowned
           exclude: |
             dist/
             coverage/
 ```
 
-For the strongest supply-chain pinning, replace `v0.1.2` with its full commit SHA. A complete least-privilege workflow is available in [examples/codeowners.yml](examples/codeowners.yml).
+For the strongest supply-chain pinning, replace `v0.2.0` with its full commit SHA. A complete least-privilege workflow is available in [examples/codeowners.yml](examples/codeowners.yml).
 
 Released tags are exercised from the independent public [integration repository](https://github.com/rarepops/codeowners-guard-integration).
 
 The action adds file annotations and a job summary. Its default token is `${{ github.token }}`, and the workflow only needs `contents: read`.
 
 The Action takes its API endpoint from GitHub's runner environment. It does not accept an endpoint input that could redirect the automatically supplied token. GitHub Enterprise Server runners provide their own trusted `GITHUB_API_URL`.
+
+### GitHub App Tokens
+
+The default `${{ github.token }}` is enough to validate the repository that runs the workflow. When your organization restricts that token, or the workflow validates another repository, create a GitHub App installation token and pass it to `github-token`:
+
+```yaml
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.CODEOWNERS_APP_ID }}
+          private-key: ${{ secrets.CODEOWNERS_APP_PRIVATE_KEY }}
+      - uses: rarepops/codeowners-guard@v0.2.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+```
 
 ### Inputs
 
@@ -114,7 +131,7 @@ The Action takes its API endpoint from GitHub's runner environment. It does not 
 | `fail-on` | `warning` | Failure threshold: `warning` or `error` |
 | `max-annotations` | `50` | Maximum workflow annotations and summary rows, up to `100` |
 
-Annotation limits do not change validation counts or failure behavior.
+Annotation limits do not change validation counts or failure behavior. To run local checks on selected folders only, see [exclusions](docs/checks.md#exclusions).
 
 ### Outputs
 
@@ -125,7 +142,7 @@ The action returns `valid`, `issue-count`, `error-count`, and `warning-count`.
 Run the published CLI without installing it globally:
 
 ```shell
-npx --yes codeowners-guard@0.1.2 . --checks duplicates,dangling,unowned
+npx --yes codeowners-guard@0.2.0 . --checks duplicates,dangling,shadowed,unowned
 ```
 
 Use `codeowners-guard@latest` instead when you explicitly want the newest release. Pinning a version keeps local and CI runs reproducible.
@@ -138,13 +155,13 @@ npm run build
 node dist/cli.js .
 ```
 
-Without `--checks`, the CLI runs `duplicates`, `dangling`, and `unowned`. The `syntax` check is opt-in because it requires a GitHub repository and may require authentication.
+Without `--checks`, the CLI runs `duplicates`, `dangling`, `shadowed`, and `unowned`. The `syntax` check is opt-in because it requires a GitHub repository and may require authentication.
 
 Local checks require no network access:
 
 ```shell
 node dist/cli.js . \
-  --checks duplicates,dangling,unowned \
+  --checks duplicates,dangling,shadowed,unowned \
   --exclude dist/ \
   --format json
 ```
@@ -153,7 +170,7 @@ GitHub's syntax check validates a committed branch, tag, or SHA:
 
 ```shell
 GITHUB_TOKEN=ghp_example node dist/cli.js . \
-  --checks syntax,duplicates,dangling,unowned \
+  --checks syntax,duplicates,dangling,shadowed,unowned \
   --repository owner/repository \
   --ref main
 ```
@@ -166,9 +183,24 @@ Use `--max-issues` to retain up to 10,000 issue details in text or JSON output. 
 
 See [troubleshooting](docs/troubleshooting.md) for authentication, ref mismatch, missing file, and exit-code guidance.
 
+### Explain Ownership
+
+Explain which local rules match a file and which rule wins:
+
+```shell
+npx --yes codeowners-guard@0.2.0 . --explain src/example.ts
+npx --yes codeowners-guard@0.2.0 . --explain src/example.ts --format json
+```
+
+This mode lists matching patterns in source order with their line numbers and owners. The last match wins, including ownerless rules that clear ownership. JSON includes `matches`, `winner` (or `null`), `owners`, and a `status` of `owned`, `cleared`, or `unmatched`.
+
+Paths are relative to the repository and may name files that are not yet tracked or do not exist. This is a local explanation, not GitHub syntax or owner validation. It uses the effective CODEOWNERS file unless `--codeowners` selects another one. Validation flags such as `--checks`, `--exclude`, and `--ref` cannot be combined with `--explain`.
+
+A completed explanation exits with `0`, even when the file has no owner. Invalid arguments or inability to read CODEOWNERS exit with `2`. Use the `unowned` check to enforce ownership in CI. Ownership explanations are available starting with version `0.1.3`.
+
 ## Design
 
-GitHub remains the authority for syntax diagnostics. Local checks operate on files returned by `git ls-files`, use a maintained gitignore-compatible matcher, and do not make separate user or team lookup calls. This keeps the Action small and avoids maintaining a second copy of GitHub's owner-resolution behavior.
+GitHub remains the authority for syntax diagnostics. Local checks operate on files returned by `git ls-files`, use a maintained gitignore-compatible matcher with exceptions verified against GitHub's own matcher, and do not make separate user or team lookup calls. This keeps the Action small and avoids maintaining a second copy of GitHub's owner-resolution behavior.
 
 The syntax check targets `ref`, while local checks target the checked-out working tree. In normal Actions usage both refer to the same commit. For uncommitted local changes, run local checks only or push the change to a ref before requesting GitHub diagnostics.
 
@@ -180,6 +212,7 @@ The syntax check targets `ref`, while local checks target the checked-out workin
 - Terminal text, workflow annotations, and HTML summaries escape control and bidirectional characters.
 - Dependency installation disables lifecycle scripts; CI checks advisories, registry signatures, and dependency diffs.
 - Tagged release artifacts include SHA-256 checksums and GitHub build-provenance attestations.
+- After publication, a read-only job compares npm and GitHub tarballs, verifies checksums and provenance against the release ref and commit, and smoke-tests the registry-installed CLI under Node.js 24.
 
 ### Performance
 
@@ -187,7 +220,7 @@ The syntax check targets `ref`, while local checks target the checked-out workin
 - GitHub diagnostics and tracked-file enumeration run concurrently.
 - Each file is normalized once and evaluated against ownership rules in one pass, while duplicate-only checks skip Git entirely.
 - Finding details are retained within configured bounds while exact counts and failure behavior cover every finding.
-- `npm run bench` measures a 10,000-rule duplicate workload and a 10,000-file by 100-rule ownership workload.
+- `npm run bench` measures a 10,000-rule duplicate workload and a 10,000-file by 100-rule ownership workload, with and without the `shadowed` check.
 
 ## Development
 
